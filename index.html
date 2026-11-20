@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Beaucoup & Remy - Walk Tracker</title>
+  <!-- Tailwind CSS for clean mobile-first styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS for Interactive Route Maps -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Supabase JS Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    .hidden { display: none !important; }
+    .map-container { height: 220px; width: 100%; border-radius: 0.75rem; z-index: 1; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans pb-20">
+
+  <!-- TOP NAVIGATION -->
+  <header class="bg-indigo-600 text-white shadow-md sticky top-0 z-50">
+    <div class="max-w-xl mx-auto px-4 py-3 flex justify-between items-center">
+      <div>
+        <h1 class="font-bold text-lg leading-tight">🐾 Beaucoup & Remy</h1>
+        <p id="user-role-badge" class="text-xs text-indigo-200">Locked</p>
+      </div>
+      <button id="logout-btn" onclick="lockApp()" class="hidden bg-indigo-700 hover:bg-indigo-800 text-xs px-3 py-1.5 rounded-lg font-medium">
+        Switch User / Lock
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-xl mx-auto px-4 pt-5">
+
+    <!-- ================= PASSCODE LOCK SCREEN ================= -->
+    <section id="auth-section" class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mt-6">
+      <div class="text-center mb-5">
+        <span class="text-4xl">🐕‍🦺🐕</span>
+        <h2 class="text-xl font-bold mt-2">Beaucoup & Remy Tracker</h2>
+        <p class="text-sm text-slate-500">Enter the shared passcode to open the app.</p>
+      </div>
+      
+      <form id="login-form" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Who is using the app?</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="cursor-pointer">
+              <input type="radio" name="role" value="walker" checked class="peer sr-only" />
+              <div class="text-center py-2.5 px-3 rounded-xl border border-slate-200 peer-checked:border-indigo-600 peer-checked:bg-indigo-50 peer-checked:text-indigo-700 font-semibold text-sm transition">
+                👟 Dog Walker
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="role" value="owner" class="peer sr-only" />
+              <div class="text-center py-2.5 px-3 rounded-xl border border-slate-200 peer-checked:border-indigo-600 peer-checked:bg-indigo-50 peer-checked:text-indigo-700 font-semibold text-sm transition">
+                🏡 Greg (Owner)
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Secret Passcode</label>
+          <input type="password" id="passcode-input" required class="w-full px-3 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-center tracking-widest font-semibold" placeholder="Enter passcode..." />
+        </div>
+
+        <p id="auth-error" class="text-red-500 text-xs text-center font-medium hidden">Incorrect passcode. Try again!</p>
+        
+        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-sm transition">
+          Unlock App
+        </button>
+      </form>
+    </section>
+
+    <!-- ================= MAIN APP DASHBOARD ================= -->
+    <div id="app-section" class="hidden space-y-6">
+
+      <!-- PENDING APPROVAL ALERT BANNER (Shows for Greg when walks need approval) -->
+      <div id="approval-alert" class="hidden bg-amber-50 border-l-4 border-amber-500 p-4 rounded-r-xl shadow-sm flex items-center justify-between">
+        <div>
+          <p class="font-bold text-amber-800 text-sm">Action Needed: New Walk Proposed</p>
+          <p class="text-xs text-amber-700">Please review and approve or decline the upcoming walk time below.</p>
+        </div>
+        <span class="bg-amber-500 text-white text-xs font-bold px-2.5 py-1 rounded-full" id="pending-count">1</span>
+      </div>
+
+      <!-- SUMMARY STATS -->
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <p class="text-xs text-slate-500 font-medium">Completed Walks</p>
+          <p id="stat-total-walks" class="text-2xl font-bold text-slate-800 mt-1">0</p>
+        </div>
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <p class="text-xs text-slate-500 font-medium">Unpaid Balance</p>
+          <p id="stat-unpaid" class="text-2xl font-bold text-rose-600 mt-1">$0.00</p>
+        </div>
+      </div>
+
+      <!-- TABS NAVIGATION -->
+      <div class="flex bg-slate-200 p-1 rounded-xl text-sm font-semibold">
+        <button onclick="switchTab('tracker')" id="tab-tracker" class="tab-btn flex-1 py-2 rounded-lg bg-white text-indigo-600 shadow-sm">Tracker</button>
+        <button onclick="switchTab('schedule')" id="tab-schedule" class="tab-btn flex-1 py-2 rounded-lg text-slate-600 relative">
+          Schedule
+          <span id="nav-badge" class="hidden absolute top-1 right-2 w-2.5 h-2.5 bg-amber-500 rounded-full"></span>
+        </button>
+        <button onclick="switchTab('history')" id="tab-history" class="tab-btn flex-1 py-2 rounded-lg text-slate-600">Logs & Pay</button>
+      </div>
+
+      <!-- ================= TAB 1: LIVE WALK TRACKER ================= -->
+      <section id="view-tracker" class="space-y-4">
+        
+        <!-- Walker Live GPS Controls -->
+        <div id="walker-tracker-box" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="font-bold text-lg">Live Walk Tracker</h3>
+            <span id="gps-status" class="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">GPS Idle</span>
+          </div>
+
+          <!-- Live Stats Display -->
+          <div class="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl text-center mb-4 border border-slate-100">
+            <div>
+              <p class="text-xs text-slate-500 uppercase tracking-wider">Duration</p>
+              <p id="live-timer" class="text-3xl font-mono font-bold text-indigo-600 mt-1">00:00</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-500 uppercase tracking-wider">Distance</p>
+              <p id="live-distance" class="text-3xl font-mono font-bold text-emerald-600 mt-1">0.00 <span class="text-sm font-sans text-slate-500">mi</span></p>
+            </div>
+          </div>
+
+          <!-- Live Map -->
+          <div id="live-map" class="map-container mb-4 bg-slate-200"></div>
+
+          <!-- Start / Stop Buttons -->
+          <div class="flex gap-3">
+            <button id="btn-start-walk" onclick="startWalk()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-sm transition">
+              ▶ Start Walk
+            </button>
+            <button id="btn-stop-walk" onclick="stopWalk()" class="hidden flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl shadow-sm transition">
+              ⏹ Finish Walk
+            </button>
+          </div>
+        </div>
+
+        <!-- Post-Walk Submission Form (Appears after stopping walk) -->
+        <div id="post-walk-form" class="hidden bg-white p-5 rounded-2xl shadow-sm border border-indigo-200 space-y-4">
+          <h3 class="font-bold text-lg text-indigo-900">Submit Walk Report</h3>
+          
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Link to Scheduled Walk (Optional)</label>
+            <select id="log-schedule-select" class="w-full p-2.5 border rounded-lg text-sm bg-white">
+              <option value="">-- Unscheduled / Drop-in Walk --</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Walk Notes (Poop, behavior, water, etc.)</label>
+            <textarea id="walk-notes" rows="3" class="w-full p-2.5 border rounded-lg text-sm" placeholder="e.g. Beaucoup pooped twice, Remy played fetch in the park!"></textarea>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Charge Amount ($)</label>
+            <input type="number" id="walk-charge" value="25" step="0.01" class="w-full p-2.5 border rounded-lg text-sm" />
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Optional Photo of Beaucoup & Remy</label>
+            <input type="file" id="walk-photo" accept="image/*" capture="environment" class="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+          </div>
+
+          <button id="btn-submit-log" onclick="submitWalkLog()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition">
+            Save & Send to Greg
+          </button>
+        </div>
+
+        <!-- Owner Message when viewing Tracker Tab -->
+        <div id="owner-tracker-notice" class="hidden bg-white p-5 rounded-2xl shadow-sm border border-slate-200 text-center">
+          <p class="text-3xl mb-2">🐕‍🦺🐕</p>
+          <h3 class="font-bold text-slate-800">Beaucoup & Remy's Latest Walk</h3>
+          <p class="text-xs text-slate-500 mt-1">Check the "Logs & Pay" tab to see routes, photos, and notes from completed walks.</p>
+        </div>
+      </section>
+
+      <!-- ================= TAB 2: SCHEDULE & APPROVALS ================= -->
+      <section id="view-schedule" class="hidden space-y-4">
+        
+        <!-- Propose New Walk (Walker Only) -->
+        <div id="propose-walk-box" class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <h3 class="font-bold text-base mb-3">Propose Next Walk Time</h3>
+          <div class="flex gap-2">
+            <input type="datetime-local" id="new-walk-time" class="flex-1 p-2.5 border rounded-lg text-sm" />
+            <button onclick="proposeWalk()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2.5 rounded-lg text-sm">
+              Send
+            </button>
+          </div>
+        </div>
+
+        <!-- Upcoming Schedule List -->
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <h3 class="font-bold text-base mb-3">Upcoming & Pending Walks</h3>
+          <div id="schedule-list" class="space-y-3">
+            <p class="text-sm text-slate-400">Loading schedule...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TAB 3: WALK HISTORY & PAYMENTS ================= -->
+      <section id="view-history" class="hidden space-y-6">
+        
+        <!-- Payment Ledger -->
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="font-bold text-base">Payment Tracker</h3>
+            <button id="btn-add-payment" onclick="addManualPayment()" class="text-xs bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded font-semibold">+ Add Charge</button>
+          </div>
+          <div id="payment-list" class="space-y-2.5">
+            <p class="text-sm text-slate-400">Loading payments...</p>
+          </div>
+        </div>
+
+        <!-- Past Walk Logs -->
+        <div class="space-y-3">
+          <h3 class="font-bold text-base px-1">Completed Walk Logs</h3>
+          <div id="walk-logs-list" class="space-y-4">
+            <p class="text-sm text-slate-400 px-1">Loading walk logs...</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <script>
+    // ================= APP CONFIGURATION =================
+    const SECRET_PASSCODE = 'beaucoupandremy2026';
+    const SUPABASE_URL = 'https://dhjcqoqjrjcdulozilxp.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRoamNxb3FqcmpjZHVsb3ppbHhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxMjk0MzAsImV4cCI6MjExMDcwNTQzMH0.ShPjdOao11XVzVVFVnDeMFCzWRtvm2rxVaOvmNMDUIE';
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // ================= GLOBAL STATE =================
+    let userRole = null; // 'walker' | 'owner'
+    
+    // Tracker State
+    let isWalking = false;
+    let walkStartTime = null;
+    let timerInterval = null;
+    let watchId = null;
+    let routeCoords = [];
+    let totalMeters = 0;
+    let liveMap = null;
+    let livePolyline = null;
+
+    // ================= PASSCODE AUTHENTICATION =================
+    window.addEventListener('DOMContentLoaded', () => {
+      // Check if user already unlocked on this device
+      const savedRole = localStorage.getItem('br_walk_role');
+      const savedPass = localStorage.getItem('br_walk_pass');
+      if (savedPass === SECRET_PASSCODE && savedRole) {
+        unlockApp(savedRole);
+      }
+    });
+
+    document.getElementById('login-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const enteredPass = document.getElementById('passcode-input').value.trim();
+      const selectedRole = document.querySelector('input[name="role"]:checked').value;
+      const errEl = document.getElementById('auth-error');
+
+      if (enteredPass === SECRET_PASSCODE) {
+        errEl.classList.add('hidden');
+        localStorage.setItem('br_walk_pass', enteredPass);
+        localStorage.setItem('br_walk_role', selectedRole);
+        unlockApp(selectedRole);
+      } else {
+        errEl.classList.remove('hidden');
+      }
+    });
+
+    function unlockApp(role) {
+      userRole = role;
+      document.getElementById('auth-section').classList.add('hidden');
+      document.getElementById('app-section').classList.remove('hidden');
+      document.getElementById('logout-btn').classList.remove('hidden');
+      
+      const badgeText = role === 'walker' ? 'Dog Walker Mode' : 'Greg (Owner) Mode';
+      document.getElementById('user-role-badge').textContent = badgeText;
+
+      setupRoleUI();
+      if (!liveMap) initLiveMap();
+      loadAllData();
+    }
+
+    function lockApp() {
+      localStorage.removeItem('br_walk_pass');
+      localStorage.removeItem('br_walk_role');
+      location.reload();
+    }
+
+    function setupRoleUI() {
+      const isWalker = userRole === 'walker';
+      document.getElementById('walker-tracker-box').classList.toggle('hidden', !isWalker);
+      document.getElementById('propose-walk-box').classList.toggle('hidden', !isWalker);
+      document.getElementById('btn-add-payment').classList.toggle('hidden', !isWalker);
+      document.getElementById('owner-tracker-notice').classList.toggle('hidden', isWalker);
+      
+      if (!isWalker) {
+        switchTab('schedule');
+      } else {
+        switchTab('tracker');
+      }
+    }
+
+    function switchTab(tabName) {
+      ['tracker', 'schedule', 'history'].forEach(t => {
+        document.getElementById(`view-${t}`).classList.add('hidden');
+        const btn = document.getElementById(`tab-${t}`);
+        btn.classList.remove('bg-white', 'text-indigo-600', 'shadow-sm');
+        btn.classList.add('text-slate-600');
+      });
+
+      document.getElementById(`view-${tabName}`).classList.remove('hidden');
+      const activeBtn = document.getElementById(`tab-${tabName}`);
+      activeBtn.classList.add('bg-white', 'text-indigo-600', 'shadow-sm');
+      activeBtn.classList.remove('text-slate-600');
+
+      if (tabName === 'tracker' && liveMap) {
+        setTimeout(() => liveMap.invalidateSize(), 100);
+      }
+    }
+
+    // ================= LOAD DASHBOARD DATA =================
+    async function loadAllData() {
+      await Promise.all([loadSchedules(), loadWalkLogs(), loadPayments()]);
+    }
+
+    // ================= SCHEDULE & APPROVALS =================
+    async function proposeWalk() {
+      const timeVal = document.getElementById('new-walk-time').value;
+      if (!timeVal) return alert('Please pick a date and time first.');
+
+      const { error } = await sb.from('walk_schedules').insert({
+        scheduled_time: new Date(timeVal).toISOString(),
+        status: 'pending'
+      });
+
+      if (error) alert('Error proposing walk: ' + error.message);
+      else {
+        document.getElementById('new-walk-time').value = '';
+        loadSchedules();
+      }
+    }
+
+    async function updateWalkStatus(id, newStatus) {
+      const { error } = await sb.from('walk_schedules').update({ status: newStatus }).eq('id', id);
+      if (error) alert('Error updating status: ' + error.message);
+      else loadSchedules();
+    }
+
+    async function loadSchedules() {
+      const { data: schedules, error } = await sb
+        .from('walk_schedules')
+        .select('*')
+        .order('scheduled_time', { ascending: true });
+
+      if (error) return console.error(error);
+
+      const listEl = document.getElementById('schedule-list');
+      const selectEl = document.getElementById('log-schedule-select');
+      listEl.innerHTML = '';
+      selectEl.innerHTML = '<option value="">-- Unscheduled / Drop-in Walk --</option>';
+
+      let pendingCount = 0;
+
+      if (!schedules.length) {
+        listEl.innerHTML = '<p class="text-sm text-slate-400">No upcoming walks scheduled yet.</p>';
+      }
+
+      schedules.forEach(item => {
+        if (item.status === 'pending') pendingCount++;
+
+        const dateStr = new Date(item.scheduled_time).toLocaleString([], {
+          weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+
+        // Populate dropdown for post-walk submission
+        if (item.status === 'approved' || item.status === 'pending') {
+          const opt = document.createElement('option');
+          opt.value = item.id;
+          opt.textContent = `${dateStr} (${item.status})`;
+          selectEl.appendChild(opt);
+        }
+
+        // Status Badge Styling
+        const badges = {
+          pending: 'bg-amber-100 text-amber-800',
+          approved: 'bg-emerald-100 text-emerald-800',
+          rejected: 'bg-rose-100 text-rose-800',
+          completed: 'bg-slate-100 text-slate-600'
+        };
+
+        // Approval Buttons for Greg (Owner)
+        let actionButtons = '';
+        if (userRole === 'owner' && item.status === 'pending') {
+          actionButtons = `
+            <div class="flex gap-2 mt-2.5">
+              <button onclick="updateWalkStatus('${item.id}', 'approved')" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-1.5 rounded-lg">
+                ✓ Yes, Works!
+              </button>
+              <button onclick="updateWalkStatus('${item.id}', 'rejected')" class="flex-1 bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold py-1.5 rounded-lg">
+                ✕ Can't Make It
+              </button>
+            </div>
+          `;
+        }
+
+        listEl.innerHTML += `
+          <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+            <div class="flex justify-between items-center">
+              <span class="font-semibold text-sm text-slate-800">${dateStr}</span>
+              <span class="text-xs font-bold px-2.5 py-0.5 rounded-full uppercase ${badges[item.status] || ''}">
+                ${item.status}
+              </span>
+            </div>
+            ${actionButtons}
+          </div>
+        `;
+      });
+
+      // Update Notification Alert for Pending Approvals
+      const alertBanner = document.getElementById('approval-alert');
+      const navBadge = document.getElementById('nav-badge');
+      if (pendingCount > 0) {
+        document.getElementById('pending-count').textContent = pendingCount;
+        navBadge.classList.remove('hidden');
+        if (userRole === 'owner') alertBanner.classList.remove('hidden');
+      } else {
+        alertBanner.classList.add('hidden');
+        navBadge.classList.add('hidden');
+      }
+    }
+
+    // ================= LIVE GPS TRACKER =================
+    function initLiveMap() {
+      liveMap = L.map('live-map').setView([33.5806, -112.2374], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+      }).addTo(liveMap);
+      livePolyline = L.polyline([], { color: '#4f46e5', weight: 5 }).addTo(liveMap);
+    }
+
+    function startWalk() {
+      if (!navigator.geolocation) {
+        return alert('GPS is not supported by your browser.');
+      }
+
+      isWalking = true;
+      walkStartTime = Date.now();
+      routeCoords = [];
+      totalMeters = 0;
+      livePolyline.setLatLngs([]);
+
+      document.getElementById('btn-start-walk').classList.add('hidden');
+      document.getElementById('btn-stop-walk').classList.remove('hidden');
+      document.getElementById('post-walk-form').classList.add('hidden');
+      document.getElementById('gps-status').textContent = '🟢 Tracking Live';
+      document.getElementById('gps-status').className = 'text-xs bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full font-semibold';
+
+      // Start Timer
+      timerInterval = setInterval(() => {
+        const elapsedSec = Math.floor((Date.now() - walkStartTime) / 1000);
+        const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+        const secs = String(elapsedSec % 60).padStart(2, '0');
+        document.getElementById('live-timer').textContent = `${mins}:${secs}`;
+      }, 1000);
+
+      // Start GPS Tracking
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          const newPoint = [latitude, longitude];
+
+          if (routeCoords.length > 0) {
+            const lastPoint = routeCoords[routeCoords.length - 1];
+            totalMeters += calculateDistanceMeters(lastPoint[0], lastPoint[1], latitude, longitude);
+          }
+
+          routeCoords.push(newPoint);
+          livePolyline.addLatLng(newPoint);
+          liveMap.setView(newPoint, 17);
+
+          const miles = (totalMeters * 0.000621371).toFixed(2);
+          document.getElementById('live-distance').innerHTML = `${miles} <span class="text-sm font-sans text-slate-500">mi</span>`;
+        },
+        (err) => {
+          console.warn('GPS Error:', err.message);
+          document.getElementById('gps-status').textContent = '⚠️ Weak GPS Signal';
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      );
+    }
+
+    function stopWalk() {
+      isWalking = false;
+      clearInterval(timerInterval);
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+
+      document.getElementById('btn-stop-walk').classList.add('hidden');
+      document.getElementById('btn-start-walk').classList.remove('hidden');
+      document.getElementById('post-walk-form').classList.remove('hidden');
+      document.getElementById('gps-status').textContent = 'Walk Finished';
+      document.getElementById('gps-status').className = 'text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full';
+    }
+
+    function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    // ================= SUBMIT WALK LOG & PHOTO =================
+    async function submitWalkLog() {
+      const btn = document.getElementById('btn-submit-log');
+      btn.disabled = true;
+      btn.textContent = 'Uploading...';
+
+      const durationSeconds = Math.floor((Date.now() - walkStartTime) / 1000);
+      const notes = document.getElementById('walk-notes').value;
+      const scheduleId = document.getElementById('log-schedule-select').value || null;
+      const chargeAmount = parseFloat(document.getElementById('walk-charge').value) || 0;
+      const photoFile = document.getElementById('walk-photo').files[0];
+
+      let photoUrl = null;
+
+      // 1. Upload Photo to Supabase Storage if selected
+      if (photoFile) {
+        const fileName = `${Date.now()}_${photoFile.name.replace(/\s+/g, '_')}`;
+        const { error: uploadErr } = await sb.storage
+          .from('walk-photos')
+          .upload(fileName, photoFile);
+
+        if (uploadErr) {
+          alert('Photo upload failed: ' + uploadErr.message);
+        } else {
+          const { data: publicUrlData } = sb.storage.from('walk-photos').getPublicUrl(fileName);
+          photoUrl = publicUrlData.publicUrl;
+        }
+      }
+
+      // 2. Save Walk Log
+      const { error: logErr } = await sb.from('walk_logs').insert({
+        walk_schedule_id: scheduleId,
+        duration_seconds: durationSeconds,
+        distance_meters: totalMeters,
+        route_coordinates: routeCoords,
+        photo_url: photoUrl,
+        notes: notes
+      });
+
+      if (logErr) {
+        alert('Error saving walk log: ' + logErr.message);
+        btn.disabled = false;
+        btn.textContent = 'Save & Send to Greg';
+        return;
+      }
+
+      // 3. Mark Schedule as Completed if linked
+      if (scheduleId) {
+        await sb.from('walk_schedules').update({ status: 'completed' }).eq('id', scheduleId);
+      }
+
+      // 4. Automatically create payment entry if charge > 0
+      if (chargeAmount > 0) {
+        await sb.from('payments').insert({
+          walk_schedule_id: scheduleId,
+          amount: chargeAmount,
+          status: 'unpaid'
+        });
+      }
+
+      // Reset UI
+      document.getElementById('post-walk-form').classList.add('hidden');
+      document.getElementById('walk-notes').value = '';
+      document.getElementById('walk-photo').value = '';
+      document.getElementById('live-timer').textContent = '00:00';
+      document.getElementById('live-distance').innerHTML = `0.00 <span class="text-sm font-sans text-slate-500">mi</span>`;
+      btn.disabled = false;
+      btn.textContent = 'Save & Send to Greg';
+
+      alert('Walk submitted successfully!');
+      loadAllData();
+      switchTab('history');
+    }
+
+    // ================= WALK LOGS & PAYMENTS =================
+    async function loadWalkLogs() {
+      const { data: logs, error } = await sb
+        .from('walk_logs')
+        .select('*')
+        .order('completed_at', { ascending: false });
+
+      if (error) return console.error(error);
+
+      document.getElementById('stat-total-walks').textContent = logs.length;
+      const container = document.getElementById('walk-logs-list');
+      container.innerHTML = '';
+
+      if (!logs.length) {
+        container.innerHTML = '<p class="text-sm text-slate-400">No completed walks logged yet.</p>';
+        return;
+      }
+
+      logs.forEach((log, idx) => {
+        const dateStr = new Date(log.completed_at).toLocaleString([], {
+          weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+        const mins = Math.round(log.duration_seconds / 60);
+        const miles = (log.distance_meters * 0.000621371).toFixed(2);
+        const mapId = `past-map-${idx}`;
+
+        container.innerHTML += `
+          <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-2">
+              <span class="font-bold text-sm text-slate-800">${dateStr}</span>
+              <span class="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">
+                ${mins} mins • ${miles} mi
+              </span>
+            </div>
+            
+            ${log.notes ? `<p class="text-sm text-slate-700 bg-slate-50 p-3 rounded-xl">📝 "${log.notes}"</p>` : ''}
+            
+            ${log.photo_url ? `<img src="${log.photo_url}" alt="Walk photo" class="w-full h-56 object-cover rounded-xl border border-slate-200" />` : ''}
+            
+            ${log.route_coordinates && log.route_coordinates.length > 1 ? `<div id="${mapId}" class="map-container"></div>` : ''}
+          </div>
+        `;
+
+        if (log.route_coordinates && log.route_coordinates.length > 1) {
+          setTimeout(() => {
+            const m = L.map(mapId, { zoomControl: false, attributionControl: false });
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(m);
+            const line = L.polyline(log.route_coordinates, { color: '#10b981', weight: 4 }).addTo(m);
+            m.fitBounds(line.getBounds());
+          }, 200);
+        }
+      });
+    }
+
+    async function loadPayments() {
+      const { data: payments, error } = await sb
+        .from('payments')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) return console.error(error);
+
+      let unpaidTotal = 0;
+      const listEl = document.getElementById('payment-list');
+      listEl.innerHTML = '';
+
+      if (!payments.length) {
+        listEl.innerHTML = '<p class="text-sm text-slate-400">No payment records yet.</p>';
+      }
+
+      payments.forEach(p => {
+        if (p.status === 'unpaid') unpaidTotal += Number(p.amount);
+
+        const dateStr = new Date(p.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const isPaid = p.status === 'paid';
+
+        listEl.innerHTML += `
+          <div class="flex justify-between items-center p-3 rounded-xl border border-slate-100 bg-slate-50">
+            <div>
+              <p class="font-bold text-sm text-slate-800">$${Number(p.amount).toFixed(2)}</p>
+              <p class="text-xs text-slate-500">Added ${dateStr}</p>
+            </div>
+            <button onclick="togglePaymentStatus('${p.id}', '${p.status}')" 
+              class="text-xs font-bold px-3 py-1.5 rounded-lg transition ${isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-700 hover:bg-rose-200'}">
+              ${isPaid ? '✓ Paid' : 'Unpaid (Tap to Mark Paid)'}
+            </button>
+          </div>
+        `;
+      });
+
+      document.getElementById('stat-unpaid').textContent = `$${unpaidTotal.toFixed(2)}`;
+    }
+
+    async function togglePaymentStatus(id, currentStatus) {
+      const newStatus = currentStatus === 'paid' ? 'unpaid' : 'paid';
+      const paidAt = newStatus === 'paid' ? new Date().toISOString() : null;
+
+      const { error } = await sb.from('payments').update({ status: newStatus, paid_at: paidAt }).eq('id', id);
+      if (error) alert('Error updating payment: ' + error.message);
+      else loadPayments();
+    }
+
+    async function addManualPayment() {
+      const amount = prompt('Enter charge amount ($):', '25.00');
+      if (!amount || isNaN(amount)) return;
+
+      const { error } = await sb.from('payments').insert({
+        amount: parseFloat(amount),
+        status: 'unpaid'
+      });
+
+      if (error) alert('Error adding charge: ' + error.message);
+      else loadPayments();
+    }
+  </script>
+</body>
+</html>
